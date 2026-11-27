@@ -41,6 +41,7 @@ export function buildTurkey() {
   head.position.set(0, 1.38, 0.52);
   head.castShadow = true;
   g.add(head);
+  g.userData.head = head;
 
   // Beak: a cone pointing forward and slightly down.
   const beak = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.28, 10), mat(BEAK, 0.6));
@@ -138,4 +139,8 @@ export function animateTurkey(group, t, jumpY, speed, grounded, lean) {
 
   const tail = group.userData.tail;
   if (tail) tail.rotation.x = -0.15 + Math.sin(t * 3.1) * 0.05;
+
+  // The head glances toward the lane the turkey is steering into.
+  const head = group.userData.head;
+  if (head) head.rotation.y = -lean * 0.35;
 }
