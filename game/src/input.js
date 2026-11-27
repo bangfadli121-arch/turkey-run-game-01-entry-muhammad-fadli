@@ -13,6 +13,7 @@ export const KEYS = {
   drop: ['ArrowDown', 'KeyS'],
   pause: ['KeyP', 'Escape'],
   confirm: ['Enter', 'NumpadEnter', 'Space'],
+  restart: ['KeyR'],
   mute: ['KeyM'],
 };
 
@@ -24,6 +25,7 @@ export function createInput(canvas, hooks) {
   const held = { left: false, right: false, jump: false, drop: false };
   const queue = { steer: 0, jump: false, drop: false };
   let confirmPressed = false;
+  let restartPressed = false;
   let pausePressed = false;
   let mutePressed = false;
   let touchStart = null;
@@ -54,6 +56,8 @@ export function createInput(canvas, hooks) {
       held.drop = true;
     } else if (matches(KEYS.pause, e.code)) {
       pausePressed = true;
+    } else if (matches(KEYS.restart, e.code)) {
+      restartPressed = true;
     } else if (matches(KEYS.confirm, e.code)) {
       confirmPressed = true;
     } else if (matches(KEYS.mute, e.code)) {
@@ -128,6 +132,12 @@ export function createInput(canvas, hooks) {
     consumeConfirm() {
       const v = confirmPressed;
       confirmPressed = false;
+      return v;
+    },
+    // R restarts straight from the caught / escaped / title screens.
+    consumeRestart() {
+      const v = restartPressed;
+      restartPressed = false;
       return v;
     },
     consumePause() {
