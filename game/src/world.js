@@ -79,6 +79,7 @@ function freshState(seed) {
     y: 0, // jump height above the track
     vy: 0,
     grounded: true,
+    jumpBuffer: 0, // seconds a jump press stays valid before landing
     invuln: 0,
     time: 0,
     rows: [], // { dist, cells: [kind|null, kind|null, kind|null] }
@@ -103,9 +104,9 @@ export function createWorld(seed = 1) {
       // three lanes with tall obstacles: with two obstacles at most,
       // one lane is always free of tall ones, so the row is always
       // survivable by switching.
-      const lanes = [0, 1, 2];
-      const first = lanes.splice(rng.int(0, 2), 1)[0];
-      const second = lanes.splice(rng.int(0, 1), 1)[0];
+      const lanes = rng.shuffle([0, 1, 2]);
+      const first = lanes[0];
+      const second = lanes[1];
       cells[first] = rng.pick(ALL_KINDS);
       cells[second] = rng.pick(ALL_KINDS);
     }
@@ -150,9 +151,16 @@ export function createWorld(seed = 1) {
     state.x += Math.max(-maxStep, Math.min(maxStep, dx));
 
     // Jump and gravity. Dropping multiplies gravity while airborne.
-    if (action && action.jump && state.grounded) {
-      state.vy = JUMP_SPEED;
-      state.grounded = false;
+    // A jump pressed just before landing is buffered (0.12 s), so a
+    // slightly early press still jumps instead of being swallowed.
+    if (action && action.jump) {
+      if (state.grounded) {
+        state.vy = JUMP_SPEED;
+        state.grounded = false;
+        state.jumpBuffer = 0;
+      } else {
+        state.jumpBuffer = 0.12;
+      }
     }
     const gravity = GRAVITY * (action && action.drop && !state.grounded ? DROP_MULTIPLIER : 1);
     state.vy -= gravity * dt;
@@ -161,7 +169,13 @@ export function createWorld(seed = 1) {
       state.y = 0;
       state.vy = 0;
       state.grounded = true;
+      if (state.jumpBuffer > 0) {
+        state.vy = JUMP_SPEED;
+        state.grounded = false;
+        state.jumpBuffer = 0;
+      }
     }
+    if (state.jumpBuffer > 0) state.jumpBuffer -= dt;
 
     // Forward motion: speed follows the level, level follows distance.
     state.speed = speedForLevel(state.level);
