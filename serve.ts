@@ -35,6 +35,11 @@ const MIME: Record<string, string> = {
 };
 
 const server = createServer(async (req, res) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.writeHead(405, { 'content-type': 'text/plain' });
+    res.end('method not allowed');
+    return;
+  }
   try {
     const url = new URL(req.url || '/', 'http://127.0.0.1');
     let pathname = decodeURIComponent(url.pathname);
