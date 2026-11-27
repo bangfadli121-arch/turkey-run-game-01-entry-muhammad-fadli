@@ -113,7 +113,10 @@ export function buildFarmer() {
 
 // Run cycle while chasing; on the caught screen the renderer parks him
 // over the turkey instead, so this only animates the chase.
-export function animateFarmer(group, t, speed, chasing) {
+// When the gap closes under ~3.5 m he reaches forward with the knife,
+// so the player can see (and hear, via the hit that follows) that the
+// farmer is about to grab the bird.
+export function animateFarmer(group, t, speed, chasing, gap = 99) {
   if (!chasing) {
     group.rotation.x = 0;
     return;
@@ -133,10 +136,12 @@ export function animateFarmer(group, t, speed, chasing) {
     arm.rotation.x = Math.sin(phase + i * Math.PI + Math.PI) * 0.6 - 0.3;
   });
 
-  // The knife arm pumps higher, waving the blade as he runs.
+  // The knife arm pumps higher, waving the blade as he runs — and
+  // reaches straight for the turkey once he is nearly on it.
   const knife = group.userData.knife;
   if (knife) {
-    knife.rotation.x = -0.5 + Math.sin(phase) * 0.35;
-    knife.rotation.z = Math.sin(phase * 0.5) * 0.15;
+    const reaching = gap < 3.5;
+    knife.rotation.x = reaching ? -1.25 : -0.5 + Math.sin(phase) * 0.35;
+    knife.rotation.z = reaching ? 0 : Math.sin(phase * 0.5) * 0.15;
   }
 }
