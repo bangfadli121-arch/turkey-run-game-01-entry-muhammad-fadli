@@ -113,6 +113,12 @@ async function main(): Promise<void> {
     images,
   };
   const dossierJson = JSON.stringify(dossier, null, 2);
+  // The dossier contract caps a dossier at 4 MiB; refuse loudly instead
+  // of writing a file the judges would reject.
+  const dossierBytes = Buffer.byteLength(dossierJson, 'utf8');
+  if (dossierBytes > 4 * 1024 * 1024) {
+    throw new Error(`dossier is ${dossierBytes} bytes, over the 4 MiB limit`);
+  }
   await writeFile(path.join(outDir, 'dossier.json'), dossierJson, 'utf8');
 
   const gameBytes = (await listFilesRecursive(path.join(outDir, 'game'), outDir)).length;
