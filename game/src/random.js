@@ -39,6 +39,17 @@ export function makeRng(seed) {
     pick(arr) {
       return arr[Math.floor(next() * arr.length)];
     },
+    // A shuffled copy of arr (Fisher-Yates).
+    shuffle(arr) {
+      const copy = arr.slice();
+      for (let i = copy.length - 1; i > 0; i -= 1) {
+        const j = Math.floor(next() * (i + 1));
+        const tmp = copy[i];
+        copy[i] = copy[j];
+        copy[j] = tmp;
+      }
+      return copy;
+    },
   };
 }
 
