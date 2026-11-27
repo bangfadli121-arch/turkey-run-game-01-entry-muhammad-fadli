@@ -1,233 +1,312 @@
-// The 3D view: renderer, golden-hour lights, chase camera, and the sync
-// from world state to meshes. HUD and title/end screens are DOM over the
-// canvas, so their text stays crisp in screenshots.
+// Turkey Escape — three.js renderer: scene, camera, and per-frame sync.
+// Written from scratch in this session (27 Nov 2026 rewrite).
+// The world owns the rules; this module only shows them. The turkey
+// stays near z = 0 while rows, corn and scenery stream past it: a row's
+// on-screen z is its absolute distance minus the turkey's distance.
+// That keeps the camera fixed and the scene cheap to update.
+//
+// IMPORTANT: the jump height comes from state.y and is passed straight
+// to animateTurkey, so a jump is always visible on screen.
+
 import * as THREE from 'three';
-import { ESCAPE_DISTANCE, LANES, PALETTE } from './config.js';
-import { createRandom } from './random.js';
+import {
+  LANE_X,
+  GOAL_DISTANCE,
+} from './config.js';
+import { SCREEN_CAUGHT, SCREEN_ESCAPED } from './world.js';
+import { hashInt } from './random.js';
 import { buildTurkey, animateTurkey } from './turkey.js';
 import { buildFarmer, animateFarmer } from './farmer.js';
 import {
-  buildSky, buildClouds, buildSegment, buildWoods,
-  buildOven, buildKnife, buildHayBale, buildPumpkinObstacle, buildCorn,
+  buildGround,
+  buildTrack,
+  buildSun,
+  buildCloud,
+  buildBarn,
+  buildAutumnTree,
+  buildPine,
+  buildFencePost,
+  buildFenceRail,
+  buildOven,
+  buildKnife,
+  buildHay,
+  buildPumpkin,
+  buildCorn,
 } from './environment.js';
+
+const SKY = 0xf5521e;
+const FOG_COLOR = 0xe86a24;
 
 const OBSTACLE_BUILDERS = {
   oven: buildOven,
   knife: buildKnife,
-  hay: buildHayBale,
-  pumpkin: buildPumpkinObstacle,
+  hay: buildHay,
+  pumpkin: buildPumpkin,
 };
 
-export function createRenderer(container, hud) {
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.setSize(window.innerWidth, window.innerHeight);
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
+}
+
+export function createRenderer(canvas) {
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.05;
-  container.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
-  scene.fog = new THREE.Fog(new THREE.Color(PALETTE.fog), 35, 130);
+  scene.background = new THREE.Color(SKY);
+  scene.fog = new THREE.Fog(FOG_COLOR, 45, 155);
 
-  const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 500);
+  const camera = new THREE.PerspectiveCamera(58, 1280 / 720, 0.1, 400);
+  camera.position.set(0, 3.4, -7.6);
 
-  // Golden-hour sun, low from the left, warm; plus a soft sky fill.
-  const sun = new THREE.DirectionalLight(0xffd9a0, 2.1);
-  sun.position.set(-30, 26, 18);
+  // Golden-hour light: warm sun from the front-left, soft sky fill.
+  const sun = new THREE.DirectionalLight(0xffe0b3, 2.4);
+  sun.position.set(-10, 16, 6);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.mapSize.set(1024, 1024);
   sun.shadow.camera.left = -25;
   sun.shadow.camera.right = 25;
   sun.shadow.camera.top = 30;
-  sun.shadow.camera.bottom = -40;
+  sun.shadow.camera.bottom = -20;
   sun.shadow.camera.near = 1;
-  sun.shadow.camera.far = 120;
-  sun.shadow.bias = -0.0005;
+  sun.shadow.camera.far = 70;
   scene.add(sun);
-  scene.add(new THREE.HemisphereLight(0xffc98a, 0x5a7a3a, 0.9));
+  sun.target.position.set(0, 0, 12);
+  scene.add(sun.target);
+  scene.add(new THREE.HemisphereLight(0xffd9a0, 0x3f5a2e, 0.9));
 
-  const skyGroup = buildSky(scene);
-  const clouds = buildClouds(scene, createRandom(20261127));
-  buildWoods(scene);
+  // Static ground and track: the turkey never moves in z, so a long
+  // plane centred ahead of the camera covers the whole visible run.
+  const ground = buildGround();
+  ground.position.z = 60;
+  scene.add(ground);
+  const track = buildTrack();
+  track.position.z = 60;
+  scene.add(track);
+
+  // Sun disc and clouds sit far ahead and never move with distance.
+  scene.add(buildSun());
+  const clouds = [];
+  for (let i = 0; i < 6; i += 1) {
+    const cloud = buildCloud(-30 + i * 13, 20 + (i % 3) * 5, 45 + i * 16, 1.4 + (i % 2) * 0.7);
+    cloud.userData.baseX = cloud.position.x;
+    scene.add(cloud);
+    clouds.push(cloud);
+  }
+
+  // The red barn marks the start of the run, on the left of the screen
+  // (screen-left is +x for a camera looking down +z).
+  const barn = buildBarn();
+  barn.position.set(14, 0, 0);
+  scene.add(barn);
+
+  // Fence rails are continuous along the track; only the posts recycle.
+  for (const side of [-1, 1]) {
+    for (const h of [0.55, 0.95]) {
+      const rail = buildFenceRail(170);
+      rail.position.set(side * 4.6, h, 65);
+      scene.add(rail);
+    }
+  }
+  const fencePosts = [];
+  for (let i = 0; i < 42; i += 1) {
+    for (const side of [-1, 1]) {
+      const post = buildFencePost();
+      post.position.x = side * 4.6;
+      scene.add(post);
+      fencePosts.push({ mesh: post, index: i * 2 + (side < 0 ? 0 : 1) });
+    }
+  }
+
+  // Tree pools: autumn trees along the whole run, pines near the woods.
+  const treePool = [];
+  for (let i = 0; i < 26; i += 1) {
+    const tree = buildAutumnTree(i);
+    scene.add(tree);
+    treePool.push(tree);
+  }
+  const pinePool = [];
+  for (let i = 0; i < 18; i += 1) {
+    const pine = buildPine(i);
+    scene.add(pine);
+    pinePool.push(pine);
+  }
 
   const turkey = buildTurkey();
-  scene.add(turkey.group);
+  scene.add(turkey);
   const farmer = buildFarmer();
-  scene.add(farmer.group);
+  scene.add(farmer);
 
-  const segments = new Map(); // index -> Group
-  const obstacles = new Map(); // id -> Group
-  const corns = new Map(); // id -> Group
+  // Live obstacles and corn, keyed by the world object they belong to.
+  const rowGroups = new Map();
+  const cornGroups = new Map();
 
-  function disposeGroup(g) {
-    g.traverse((o) => {
-      if (o.isMesh) {
-        o.geometry.dispose();
-        const m = o.material;
-        if (Array.isArray(m)) m.forEach((x) => x.dispose());
-        else if (m) m.dispose();
-      }
+  function buildRowGroup(row) {
+    const group = new THREE.Group();
+    row.cells.forEach((kind, lane) => {
+      if (!kind) return;
+      const mesh = OBSTACLE_BUILDERS[kind]();
+      mesh.position.x = LANE_X[lane];
+      group.add(mesh);
     });
-    scene.remove(g);
+    return group;
   }
 
-  function syncSegments(wanted) {
-    for (const [i, g] of [...segments]) {
-      if (!wanted.has(i)) {
-        disposeGroup(g);
-        segments.delete(i);
+  function syncObstacles(state) {
+    for (const row of state.rows) {
+      const relZ = row.dist - state.distance;
+      if (relZ < -5 || relZ > 135) {
+        const old = rowGroups.get(row);
+        if (old) {
+          scene.remove(old);
+          rowGroups.delete(row);
+        }
+        continue;
       }
-    }
-    for (const i of wanted) {
-      if (segments.has(i)) continue;
-      // Segment decorations are seeded by index: same world every run.
-      let seed = (i * 2654435761) >>> 0;
-      const rng = () => {
-        seed = (seed + 0x6d2b79f5) | 0;
-        let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-      };
-      const seg = buildSegment(i, rng);
-      scene.add(seg);
-      segments.set(i, seg);
-    }
-  }
-
-  function syncObstacles(list, playerZ) {
-    const alive = new Set();
-    for (const o of list) {
-      alive.add(o.id);
-      if (!obstacles.has(o.id)) {
-        const mesh = OBSTACLE_BUILDERS[o.kind]();
-        mesh.position.set(LANES[o.lane], 0, o.z);
-        scene.add(mesh);
-        obstacles.set(o.id, mesh);
+      let group = rowGroups.get(row);
+      if (!group) {
+        group = buildRowGroup(row);
+        scene.add(group);
+        rowGroups.set(row, group);
       }
-      const mesh = obstacles.get(o.id);
-      if (o.hit) {
-        mesh.rotation.z = 0.35;
-        mesh.position.y = -0.15;
-      }
+      group.position.z = relZ;
     }
-    for (const [id, mesh] of [...obstacles]) {
-      // Gone once it is behind the turkey and out of the camera's view:
-      // a passed oven must not sit in the foreground blocking the shot.
-      if (!alive.has(id) || mesh.position.z > playerZ + 8) {
-        disposeGroup(mesh);
-        obstacles.delete(id);
+    // Drop groups whose rows were pruned from the state.
+    for (const [row, group] of rowGroups) {
+      if (!state.rows.includes(row)) {
+        scene.remove(group);
+        rowGroups.delete(row);
       }
     }
   }
 
-  function syncCorns(list, playerZ, t) {
-    const alive = new Set();
-    for (const c of list) {
-      if (c.taken) continue;
-      alive.add(c.id);
-      if (!corns.has(c.id)) {
-        const mesh = buildCorn();
-        mesh.position.set(LANES[c.lane], 1.05, c.z);
-        scene.add(mesh);
-        corns.set(c.id, mesh);
+  function syncCorn(state, time) {
+    for (const cob of state.corns) {
+      if (cob.taken) {
+        const old = cornGroups.get(cob);
+        if (old) {
+          scene.remove(old);
+          cornGroups.delete(cob);
+        }
+        continue;
       }
-      const mesh = corns.get(c.id);
-      mesh.rotation.y = t * 2.2;
-      mesh.position.y = 1.05 + Math.sin(t * 3 + c.id) * 0.12;
+      const relZ = cob.dist - state.distance;
+      if (relZ < -4 || relZ > 135) {
+        const old = cornGroups.get(cob);
+        if (old) {
+          scene.remove(old);
+          cornGroups.delete(cob);
+        }
+        continue;
+      }
+      let group = cornGroups.get(cob);
+      if (!group) {
+        group = buildCorn();
+        scene.add(group);
+        cornGroups.set(cob, group);
+      }
+      group.position.set(LANE_X[cob.lane], 0, relZ);
+      group.rotation.y = time * 2 + cob.dist;
     }
-    for (const [id, mesh] of [...corns]) {
-      if (!alive.has(id) || mesh.position.z > playerZ + 20) {
-        disposeGroup(mesh);
-        corns.delete(id);
+    for (const [cob, group] of cornGroups) {
+      if (!state.corns.includes(cob)) {
+        scene.remove(group);
+        cornGroups.delete(cob);
       }
     }
   }
 
-  function setOverlay(which, data) {
-    for (const [name, el] of Object.entries(hud.overlays)) {
-      el.classList.toggle('show', name === which);
+  function syncScenery(state, time) {
+    const d = state.distance;
+    // Fence posts recycle every 4 m.
+    const base = Math.floor((d - 12) / 4) * 4;
+    for (const { mesh, index } of fencePosts) {
+      const absDist = base + index * 2;
+      mesh.position.z = absDist - d;
+      mesh.visible = absDist - d > -14 && absDist - d < 150;
     }
-    if (which === 'caught') {
-      hud.caughtScore.textContent = `Score ${data.score}  ·  ${Math.floor(data.distance)} m  ·  ${data.corn} corn`;
-    }
-    if (which === 'escaped') {
-      hud.escapedScore.textContent = `Score ${data.score}  ·  ${Math.floor(data.distance)} m  ·  ${data.corn} corn`;
-    }
-    if (which === 'title') {
-      hud.bestLine.textContent = data.best > 0 ? `Best score: ${data.best}` : 'Your first run — the farmer is hungry.';
-    }
+    // Autumn trees recycle every 26 m, alternating sides.
+    const treeBase = Math.floor((d - 10) / 26) * 26;
+    treePool.forEach((tree, j) => {
+      const absDist = treeBase + j * 26 + hashInt(j * 3 + 1) * 10;
+      const side = j % 2 === 0 ? -1 : 1;
+      tree.position.set(side * (9 + hashInt(j * 3 + 2) * 8), 0, absDist - d);
+      tree.visible = absDist - d > -14 && absDist - d < 150;
+    });
+    // Pines only once the woods are near (and on the escaped screen).
+    // Tight spacing and close to the track so the final stretch really
+    // feels like running into a pine forest.
+    const pineBase = Math.floor((d - 10) / 18) * 18;
+    pinePool.forEach((pine, j) => {
+      const absDist = pineBase + j * 18 + hashInt(j * 5 + 4) * 8;
+      const side = j % 2 === 0 ? -1 : 1;
+      pine.position.set(side * (5.5 + hashInt(j * 5 + 6) * 4.5), 0, absDist - d);
+      pine.visible = absDist > 1150 && absDist - d > -14 && absDist - d < 150;
+    });
+    // Barn sits at the start line and slides away behind the camera.
+    barn.position.z = 10 - d;
+    barn.visible = barn.position.z > -20 && barn.position.z < 150;
+    // Clouds drift slowly sideways — a pure function of time, so a
+    // frozen frame (screenshot mode) renders identically every time.
+    clouds.forEach((cloud, i) => {
+      cloud.position.x = cloud.userData.baseX + Math.sin(time * 0.05 + i * 1.7) * 1.2;
+    });
   }
 
-  function draw(state, t) {
-    const pz = -state.distance;
-    // Turkey.
-    turkey.group.position.set(state.x, state.y, pz);
-    const lean = (state.x - LANES[state.lane]) * -0.12;
-    animateTurkey(turkey, t, state.speed / 17, lean, state.airborne, state.vy, state.y);
-    turkey.group.visible = !(state.invulnerable > 0 && Math.floor(t * 12) % 2 === 0);
-    if (state.screen === 'caught') {
-      turkey.group.rotation.z = 1.35;
-      turkey.group.position.y = 0.25;
-      turkey.group.visible = true;
+  function sync(state, time) {
+    // Chase camera: behind and above the turkey, looking down the track.
+    // Far enough back that the farmer (8 m behind at the start) shows
+    // at the bottom of the frame on the title screen.
+    camera.position.set(state.x * 0.55, 3.4, -10.5);
+    camera.lookAt(state.x * 0.7, 1.0, 14);
+    sun.position.set(state.x - 10, 16, 6);
+    sun.target.position.set(state.x, 0, 12);
+
+    const lean = clamp((LANE_X[state.lane] - state.x) / 2.4, -1, 1);
+    turkey.position.set(state.x, 0, 0);
+    if (state.screen === SCREEN_CAUGHT) {
+      // Dinner time: the turkey lies on its back, the farmer over it.
+      animateTurkey(turkey, time, 0, 0, true, 0);
+      turkey.position.y = 0.42;
+      turkey.rotation.set(0.4, 0, Math.PI * 0.88);
+      farmer.visible = true;
+      farmer.position.set(state.x, 0, 1.1);
+      farmer.rotation.y = Math.PI;
+      animateFarmer(farmer, time, 0, false);
+    } else if (state.screen === SCREEN_ESCAPED) {
+      animateTurkey(turkey, time, state.y, 0, state.grounded, 0);
+      turkey.position.y = state.y + 0.05;
+      // The farmer is left far behind in the fields: hide him so the
+      // woods belong to the turkey alone on this screen.
+      farmer.visible = false;
+    } else {
+      farmer.visible = true;
+      animateTurkey(turkey, time, state.y, state.speed, state.grounded, lean);
+      farmer.position.set(state.x * 0.9, 0, -state.gap);
+      farmer.rotation.y = 0;
+      animateFarmer(farmer, time, state.speed, true);
     }
-    if (state.screen === 'escaped') {
-      turkey.group.rotation.z = 0;
-      turkey.group.rotation.x = 0;
-      turkey.group.position.y = Math.abs(Math.sin(t * 6)) * 0.25;
-    }
 
-    // Farmer: always a few metres behind, looming.
-    const gap = state.screen === 'caught' ? 1.4 : state.screen === 'escaped' ? 18 : state.farmerGap;
-    farmer.group.position.set(state.x * 0.85, 0, pz + gap);
-    farmer.group.visible = true;
-    animateFarmer(farmer, t, state.speed / 17);
-
-    // Chase camera. The framing depends on the screen: on the title the
-    // camera sits back so the farmer reads as a whole figure at the bottom
-    // instead of a hat filling the frame; in play it sits higher, so the
-    // farmer (near) reads below the turkey (far).
-    const screen = state.screen;
-    const camY = screen === 'title' ? 4.0 : screen === 'caught' ? 3.8 : 4.6;
-    const camZ = screen === 'title' ? pz + 13 : screen === 'caught' ? pz + 10 : pz + 12;
-    const lookY = screen === 'title' ? 1.0 : screen === 'caught' ? 1.0 : 0.8;
-    const camX = state.x * 0.5;
-    camera.position.set(camX, camY, camZ);
-    camera.lookAt(state.x * 0.8, lookY, pz - 16);
-    skyGroup.position.set(0, 0, pz);
-    sun.position.set(state.x - 30, 26, pz + 18);
-    sun.target.position.set(state.x, 0, pz - 10);
-    sun.target.updateMatrixWorld();
-
-    clouds.position.z = pz * 0.02;
-    clouds.rotation.y = t * 0.002;
-
-    syncSegments(state.segments);
-    syncObstacles(state.obstacles, pz);
-    syncCorns(state.corns, pz, t);
-
-    // HUD.
-    const progress = Math.min(1, state.distance / ESCAPE_DISTANCE);
-    hud.score.textContent = String(state.score);
-    hud.distance.textContent = `${Math.floor(state.distance)} m`;
-    hud.corn.textContent = `CORN ${state.corn}`;
-    hud.lives.textContent = '♥'.repeat(Math.max(0, state.lives)) + '♡'.repeat(Math.max(0, 3 - state.lives));
-    hud.level.textContent = `LEVEL ${state.level}`;
-    hud.progress.style.width = `${(progress * 100).toFixed(1)}%`;
-    const farmerNear = state.farmerGap <= 4 && state.screen === 'play';
-    hud.warning.classList.toggle('show', farmerNear);
-    if (farmerNear) hud.warning.textContent = `THE FARMER IS ${state.farmerGap.toFixed(1)} m BEHIND YOU!`;
-
+    syncObstacles(state);
+    syncCorn(state, time);
+    syncScenery(state, time);
     renderer.render(scene, camera);
   }
 
-  function resize() {
-    camera.aspect = window.innerWidth / window.innerHeight;
+  function resize(width, height) {
+    renderer.setSize(width, height, false);
+    camera.aspect = width / height;
     camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
   }
-  window.addEventListener('resize', resize);
 
-  return { draw, setOverlay, resize };
+  function reset() {
+    for (const [, group] of rowGroups) scene.remove(group);
+    for (const [, group] of cornGroups) scene.remove(group);
+    rowGroups.clear();
+    cornGroups.clear();
+  }
+
+  return { sync, resize, reset, renderer, scene, camera };
 }
