@@ -83,6 +83,11 @@ export const audio = {
     tone({ freq: 300, freqEnd: 170, dur: 0.09, type: 'square', vol: 0.12, delay: 0.1 });
     tone({ freq: 280, freqEnd: 150, dur: 0.13, type: 'square', vol: 0.12, delay: 0.2 });
   },
+  // A quick rising chirp when the level goes up.
+  levelup() {
+    tone({ freq: 660, dur: 0.09, type: 'triangle', vol: 0.16 });
+    tone({ freq: 880, dur: 0.14, type: 'triangle', vol: 0.16, delay: 0.09 });
+  },
   jump() {
     tone({ freq: 280, freqEnd: 620, dur: 0.16, type: 'sine', vol: 0.16 });
   },
