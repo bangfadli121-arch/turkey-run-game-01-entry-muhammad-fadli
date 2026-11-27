@@ -4,93 +4,127 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:,">
-<title>Turkey Escape — Run, Gobble, Don't Get Carved!</title>
+<title>Turkey Escape — a Thanksgiving runner</title>
 <style>
-  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #F2A65A; font-family: "Trebuchet MS", Verdana, sans-serif; }
-  #gl, #gl canvas { position: fixed; inset: 0; display: block; }
-  #hud { position: fixed; inset: 0; pointer-events: none; color: #FFF8E7; }
-  .panel { background: rgba(11, 27, 51, 0.72); border: 2px solid rgba(255, 201, 60, 0.55); border-radius: 12px; padding: 8px 14px; }
-  #hud-top { position: absolute; top: 12px; left: 12px; right: 12px; display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
-  #hud-score-box { font-size: 15px; line-height: 1.35; }
-  #hud-score { font-size: 30px; font-weight: bold; color: #FFC93C; }
-  #hud-distance { font-size: 18px; font-weight: bold; }
-  #hud-corn { font-size: 15px; color: #FFD54F; }
-  #hud-lives { font-size: 22px; color: #FF5A3C; letter-spacing: 2px; }
-  #hud-level { font-size: 13px; color: #FFD54F; text-align: right; }
-  #hud-progress-wrap { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); width: 280px; text-align: center; font-size: 12px; letter-spacing: 1px; }
-  #hud-progress-bar { height: 10px; background: rgba(11, 27, 51, 0.72); border: 2px solid rgba(255, 201, 60, 0.55); border-radius: 6px; overflow: hidden; margin-top: 4px; }
-  #hud-progress { height: 100%; width: 0%; background: linear-gradient(90deg, #FFC93C, #FF7A1A); }
-  #hud-warning { position: absolute; top: 84px; left: 50%; transform: translateX(-50%); background: rgba(120, 20, 10, 0.85); border: 2px solid #FF5A3C; color: #FFF8E7; font-weight: bold; font-size: 17px; padding: 8px 18px; border-radius: 12px; display: none; }
-  #hud-warning.show { display: block; }
-  .overlay { position: fixed; inset: 0; display: none; align-items: flex-start; justify-content: center; text-align: center; color: #FFF8E7; pointer-events: none; padding-top: 56px; }
-  .overlay.show { display: flex; }
-  .overlay .card { background: rgba(11, 27, 51, 0.78); border: 3px solid #FFC93C; border-radius: 20px; padding: 22px 38px; max-width: 620px; }
-  .overlay h1 { margin: 0 0 6px; font-size: 46px; color: #FFC93C; letter-spacing: 2px; text-shadow: 0 3px 0 rgba(0,0,0,0.35); }
-  .overlay h2 { margin: 0 0 10px; font-size: 40px; color: #FFC93C; }
-  .overlay p { margin: 8px 0; font-size: 18px; line-height: 1.5; }
-  .overlay .keys { font-size: 16px; color: #FFD54F; }
-  .overlay .go { font-size: 20px; font-weight: bold; color: #FFF8E7; margin-top: 14px; }
-  .overlay .score-line { font-size: 20px; color: #FFD54F; }
-  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #1a0d08; }
+  body { font-family: "Trebuchet MS", Verdana, Geneva, sans-serif; color: #fff; }
+  #app { position: fixed; inset: 0; }
+  #scene { display: block; width: 100%; height: 100%; touch-action: none; }
+
+  .hud-box {
+    position: absolute; z-index: 5;
+    background: rgba(38, 14, 38, 0.72);
+    border: 2px solid #d9a83c; border-radius: 12px;
+    padding: 8px 14px; line-height: 1.25;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+  }
+  #hud-left { top: 12px; left: 12px; min-width: 110px; }
+  #hud-right { top: 12px; right: 12px; min-width: 110px; text-align: right; }
+  .hud-label { font-size: 12px; letter-spacing: 2px; color: #f5d9a0; }
+  #hud-score { font-size: 34px; font-weight: bold; color: #ffcf4d; }
+  #hud-corn { font-size: 14px; color: #ffcf4d; }
+  #hud-distance { font-size: 26px; font-weight: bold; }
+  #hud-lives { font-size: 18px; color: #ff5a4d; letter-spacing: 2px; }
+  #hud-level { font-size: 13px; color: #ffcf4d; letter-spacing: 1px; }
+
+  #hud-progress-wrap {
+    position: absolute; z-index: 5; top: 12px; left: 50%; transform: translateX(-50%);
+    width: min(420px, 40vw); text-align: center;
+  }
+  #hud-progress-label { font-size: 12px; letter-spacing: 2px; color: #ffe9c0; text-shadow: 0 1px 3px rgba(0,0,0,0.7); }
+  #hud-progress-bar {
+    margin-top: 4px; height: 12px; border-radius: 6px;
+    background: rgba(20, 8, 20, 0.65); border: 1px solid #d9a83c; overflow: hidden;
+  }
+  #hud-progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #ffcf4d, #ff8a2a); }
+
+  #mute-note {
+    position: absolute; z-index: 5; bottom: 10px; right: 12px;
+    font-size: 12px; color: rgba(255, 255, 255, 0.75); text-shadow: 0 1px 2px rgba(0,0,0,0.7);
+  }
+
+  .overlay {
+    position: absolute; z-index: 10; left: 50%; top: 42%;
+    transform: translate(-50%, -50%);
+    width: min(640px, 88vw);
+    background: rgba(38, 14, 38, 0.85);
+    border: 3px solid #e8b73c; border-radius: 18px;
+    padding: 26px 30px 22px; text-align: center;
+    display: none;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  }
+  .overlay.show { display: block; }
+  .overlay h1 {
+    margin: 0 0 12px; font-size: 46px; letter-spacing: 4px;
+    color: #ffcf4d; text-shadow: 0 3px 0 rgba(120, 40, 0, 0.55);
+  }
+  .overlay p { margin: 8px 0; font-size: 17px; line-height: 1.45; }
+  .overlay .controls { font-size: 15px; color: #ffd98a; }
+  .overlay .stats { font-size: 18px; color: #ffcf4d; font-weight: bold; }
+  .overlay .prompt { font-size: 19px; font-weight: bold; margin-top: 16px; }
+  .overlay .tiny { font-size: 13px; color: #d9c2a8; }
 </style>
 <script type="importmap">
-{
-  "imports": {
-    "three": "./vendor/three.module.min.js"
-  }
-}
+  { "imports": { "three": "./vendor/three.module.min.js" } }
 </script>
 </head>
 <body>
-<div id="gl"></div>
-<div id="hud">
-  <div id="hud-top">
-    <div class="panel" id="hud-score-box">SCORE<br><span id="hud-score">0</span><br><span id="hud-corn">CORN 0</span></div>
-    <div class="panel"><span id="hud-distance">0 m</span><br><span id="hud-lives">♥♥♥</span><br><span id="hud-level">LEVEL 1</span></div>
-  </div>
-  <div id="hud-progress-wrap">ESCAPE TO THE WOODS — 1500 m
-    <div id="hud-progress-bar"><div id="hud-progress"></div></div>
-  </div>
-  <div id="hud-warning"></div>
-</div>
+<div id="app">
+  <canvas id="scene"></canvas>
 
-<div class="overlay" id="overlay-title">
-  <div class="card">
+  <div id="hud-left" class="hud-box">
+    <div class="hud-label">SCORE</div>
+    <div id="hud-score">0</div>
+    <div id="hud-corn">CORN 0</div>
+  </div>
+
+  <div id="hud-right" class="hud-box">
+    <div id="hud-distance">0 m</div>
+    <div id="hud-lives">♥♥♥</div>
+    <div id="hud-level">LEVEL 1</div>
+  </div>
+
+  <div id="hud-progress-wrap">
+    <div id="hud-progress-label">ESCAPE TO THE WOODS — 1500 m</div>
+    <div id="hud-progress-bar"><div id="hud-progress-fill"></div></div>
+  </div>
+
+  <div id="mute-note">M — sound on</div>
+
+  <div id="overlay-title" class="overlay show">
     <h1>TURKEY ESCAPE</h1>
-    <p>Thanksgiving is coming and the farmer has the carving knife out.<br>Run the farm track, dodge the oven and the knives, grab the corn — and reach the woods 1500 m away.</p>
-    <p class="keys">← → or A / D — switch lane &nbsp;·&nbsp; SPACE / ↑ — jump &nbsp;·&nbsp; ↓ — drop fast<br>Click or swipe works too &nbsp;·&nbsp; P — pause</p>
-    <p id="best-line">Your first run — the farmer is hungry.</p>
-    <p class="go">Press ENTER or click to run!</p>
+    <p>Thanksgiving is coming and the farmer has the carving knife out.
+       Run the farm track, dodge the oven and the knives, jump the hay
+       bales and pumpkins, grab the corn — and reach the woods 1500 m away.</p>
+    <p class="controls">← → or A / D — switch lane &nbsp;·&nbsp; SPACE / ↑ — jump &nbsp;·&nbsp; ↓ — drop fast<br>
+       Click or swipe works too &nbsp;·&nbsp; P — pause &nbsp;·&nbsp; M — sound</p>
+    <p>Your first run — the farmer is hungry.</p>
+    <p class="prompt">Press ENTER or click to run!</p>
   </div>
-</div>
 
-<div class="overlay" id="overlay-paused">
-  <div class="card">
-    <h2>PAUSED</h2>
-    <p>The farmer waits. The turkey catches its breath.</p>
-    <p class="go">Press P or ENTER to keep running</p>
-  </div>
-</div>
-
-<div class="overlay" id="overlay-caught">
-  <div class="card">
-    <h2>CAUGHT!</h2>
+  <div id="overlay-caught" class="overlay">
+    <h1>CAUGHT!</h1>
     <p>The farmer got you. Tonight, you are Thanksgiving dinner.</p>
-    <p class="score-line" id="caught-score"></p>
-    <p class="go">Press ENTER or click to try again</p>
+    <p class="stats" id="caught-stats"></p>
+    <p class="prompt">Press ENTER or click to try again</p>
   </div>
-</div>
 
-<div class="overlay" id="overlay-escaped">
-  <div class="card">
-    <h2>ESCAPED!</h2>
+  <div id="overlay-escaped" class="overlay">
+    <h1>ESCAPED!</h1>
     <p>You made it to the woods. The farmer is still looking. Happy Thanksgiving!</p>
-    <p class="score-line" id="escaped-score"></p>
-    <p class="go">Press ENTER or click to run again</p>
+    <p class="stats" id="escaped-stats"></p>
+    <p class="prompt">Press ENTER or click to run again</p>
+  </div>
+
+  <div id="overlay-pause" class="overlay">
+    <h1>PAUSED</h1>
+    <p>The turkey catches its breath. The farmer waits.</p>
+    <p class="prompt">Press P or click to keep running</p>
+    <p class="tiny">Tip: the oven and the carving knife are tall — switch lane.
+       Hay bales and pumpkins are low — jump them.</p>
   </div>
 </div>
-
-<p id="status" role="status" aria-live="polite"></p>
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>
