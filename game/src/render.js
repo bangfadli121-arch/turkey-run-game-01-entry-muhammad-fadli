@@ -165,7 +165,7 @@ export function createRenderer(container, hud) {
     // Turkey.
     turkey.group.position.set(state.x, state.y, pz);
     const lean = (state.x - LANES[state.lane]) * -0.12;
-    animateTurkey(turkey, t, state.speed / 17, lean, state.airborne, state.vy);
+    animateTurkey(turkey, t, state.speed / 17, lean, state.airborne, state.vy, state.y);
     turkey.group.visible = !(state.invulnerable > 0 && Math.floor(t * 12) % 2 === 0);
     if (state.screen === 'caught') {
       turkey.group.rotation.z = 1.35;
