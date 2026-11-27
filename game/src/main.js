@@ -92,6 +92,7 @@ function startRun() {
   audio.click();
   audio.gobble();
   world.start();
+  lastLevel = 1;
   renderer.reset();
   showOverlay(null);
 }
@@ -147,6 +148,7 @@ if (SHOT_MODE) {
 // --- Main loop ----------------------------------------------------------
 let lastNow = performance.now();
 let accumulator = 0;
+let lastLevel = 1;
 
 function frame(now) {
   const dt = Math.min(0.1, (now - lastNow) / 1000);
@@ -167,7 +169,7 @@ function frame(now) {
   }
 
   if (screen === SCREEN_TITLE || screen === SCREEN_CAUGHT || screen === SCREEN_ESCAPED) {
-    if (input.consumeConfirm()) startRun();
+    if (input.consumeConfirm() || input.consumeRestart()) startRun();
     input.readAction(); // drain any queued steering
   } else if (screen === SCREEN_PAUSED) {
     if (input.consumePause() || input.consumeConfirm()) resumeRun();
@@ -185,6 +187,10 @@ function frame(now) {
         }
         const events = world.fixedStep(action);
         onEvents(events);
+        if (world.state.level !== lastLevel && world.state.screen === SCREEN_PLAYING) {
+          lastLevel = world.state.level;
+          audio.levelup();
+        }
         accumulator -= STEP;
         if (world.state.screen !== SCREEN_PLAYING) {
           accumulator = 0;
