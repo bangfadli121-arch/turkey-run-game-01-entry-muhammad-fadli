@@ -113,12 +113,14 @@ export function buildTurkey() {
   return { group, parts };
 }
 
-/** Run-cycle animation: bob, wing flap, leg swing, lean into lane changes. */
-export function animateTurkey(built, t, speedNorm, lean, airborne, vy) {
+/** Run-cycle animation: bob, wing flap, leg swing, lean into lane changes.
+ *  `jumpY` is the world's jump height (0 on the ground): it lifts the
+ *  whole bird, so a jump reads as a jump instead of a wing flutter. */
+export function animateTurkey(built, t, speedNorm, lean, airborne, vy, jumpY) {
   const { group, parts } = built;
   const runPhase = t * (10 + speedNorm * 8);
   const bob = Math.abs(Math.sin(runPhase)) * 0.09;
-  group.position.y = bob + (airborne ? 0 : 0);
+  group.position.y = jumpY + bob;
   group.rotation.z = -lean * 0.35;
   group.rotation.x = airborne ? -0.12 : 0.06 + Math.sin(runPhase) * 0.03;
   parts.tail.rotation.x = -0.15 - Math.sin(runPhase) * 0.06;
