@@ -1,164 +1,211 @@
-// Boot and the one loop: input is read every frame, the world advances in
-// fixed 1/60 s steps, and the renderer paints what is there. The game
-// moves between five screens: title, play, paused, caught and escaped.
+// Turkey Escape — browser entry point.
+// Written from scratch in this session (27 Nov 2026 rewrite).
+// Wires the pure world to the renderer, the input and the sounds, keeps
+// the HUD and the overlays in sync, and stages deterministic screenshots
+// when the page is opened with ?shot=…&seed=….
 //
-// ?seed=N fixes the obstacle pattern. ?shot=start|play|caught|escaped
-// (with &seed=N) stages that scene instead of running the loop, paints it
-// twice and sets window.__shotReady for a screenshot.
-import { BEST_KEY, STEP } from './config.js';
-import { createWorld, EVENT_CAUGHT, EVENT_CORN, EVENT_ESCAPED, EVENT_HIT, EVENT_LEVEL } from './world.js';
-import { ACTION_CONFIRM, ACTION_DROP, ACTION_JUMP, ACTION_LEFT, ACTION_PAUSE, ACTION_RIGHT, createInput } from './input.js';
+// Shot mode freezes the world after staging: the render loop keeps
+// drawing the same frozen frame (fixed animation time), so a screenshot
+// taken at any moment after __shotReady is identical.
+
+import { STEP, GOAL_DISTANCE } from './config.js';
+import {
+  createWorld,
+  EVENT_CORN,
+  EVENT_HIT,
+  EVENT_CAUGHT,
+  EVENT_ESCAPED,
+  SCREEN_TITLE,
+  SCREEN_PLAYING,
+  SCREEN_PAUSED,
+  SCREEN_CAUGHT,
+  SCREEN_ESCAPED,
+} from './world.js';
 import { createRenderer } from './render.js';
-import { createAudio } from './audio.js';
+import { createInput } from './input.js';
+import { audio } from './audio.js';
 import { stageShot } from './shots.js';
 
-const MAX_FRAME = 0.25;
+const params = new URLSearchParams(location.search);
+const shotKind = params.get('shot');
+const seed = Number.parseInt(params.get('seed') || '1', 10) || 1;
+const SHOT_MODE = shotKind === 'start' || shotKind === 'play' || shotKind === 'caught' || shotKind === 'escaped';
 
-const params = new URLSearchParams(window.location.search);
-const shot = params.get('shot');
-const seedParam = Number.parseInt(params.get('seed') ?? '', 10);
-const seed = Number.isInteger(seedParam) ? seedParam : Math.floor(Math.random() * 4294967296);
-
-const container = document.getElementById('gl');
-const status = document.getElementById('status');
+const canvas = document.querySelector('#scene');
 const hud = {
-  score: document.getElementById('hud-score'),
-  distance: document.getElementById('hud-distance'),
-  corn: document.getElementById('hud-corn'),
-  lives: document.getElementById('hud-lives'),
-  level: document.getElementById('hud-level'),
-  progress: document.getElementById('hud-progress'),
-  warning: document.getElementById('hud-warning'),
-  overlays: {
-    title: document.getElementById('overlay-title'),
-    paused: document.getElementById('overlay-paused'),
-    caught: document.getElementById('overlay-caught'),
-    escaped: document.getElementById('overlay-escaped'),
-  },
-  bestLine: document.getElementById('best-line'),
-  caughtScore: document.getElementById('caught-score'),
-  escapedScore: document.getElementById('escaped-score'),
+  score: document.querySelector('#hud-score'),
+  distance: document.querySelector('#hud-distance'),
+  corn: document.querySelector('#hud-corn'),
+  lives: document.querySelector('#hud-lives'),
+  level: document.querySelector('#hud-level'),
+  progress: document.querySelector('#hud-progress-fill'),
 };
+const overlays = {
+  title: document.querySelector('#overlay-title'),
+  caught: document.querySelector('#overlay-caught'),
+  escaped: document.querySelector('#overlay-escaped'),
+  pause: document.querySelector('#overlay-pause'),
+};
+const caughtStats = document.querySelector('#caught-stats');
+const escapedStats = document.querySelector('#escaped-stats');
 
 const world = createWorld(seed);
-const renderer = createRenderer(container, hud);
-const input = createInput(window);
-const audio = createAudio();
+const renderer = createRenderer(canvas);
 
-function readBest() {
-  try {
-    return Number.parseInt(window.localStorage.getItem(BEST_KEY) ?? '0', 10) || 0;
-  } catch {
-    return 0;
-  }
-}
-
-function saveBest(value) {
-  try {
-    window.localStorage.setItem(BEST_KEY, String(value));
-  } catch {
-    // Storage can be off: the best score then lasts this visit only.
-  }
-}
-
-let best = readBest();
-
-function showScreen(name) {
-  const data = { score: world.state.score, distance: world.state.distance, corn: world.state.corn, best };
-  renderer.setOverlay(name, data);
-  if (name === 'title') status.textContent = 'Turkey Escape. Press Enter or click to run from the farmer.';
-  if (name === 'caught') status.textContent = `Caught! Score ${world.state.score}. Press Enter to try again.`;
-  if (name === 'escaped') status.textContent = `Escaped! Score ${world.state.score}. Press Enter to run again.`;
-  if (name === 'paused') status.textContent = 'Paused. Press P or Enter to keep running.';
-}
-
-function runShot(name) {
-  const scene = stageShot(name, world);
-  showScreen(scene.screen);
-  // Fixed animation time: the same shot must paint the same frame twice.
-  const fixedT = 12.5;
-  let painted = 0;
-  function paint() {
-    renderer.draw(world.state, fixedT);
-    painted += 1;
-    if (painted < 2) requestAnimationFrame(paint);
-    else window.__shotReady = true;
-  }
-  requestAnimationFrame(paint);
-}
-
-function runGame() {
-  showScreen('title');
-  let last = performance.now();
-  let acc = 0;
-
-  function frame(now) {
-    const dt = Math.min(MAX_FRAME, (now - last) / 1000);
-    last = now;
-    const actions = input.drain();
+let tapJump = false;
+const input = createInput(canvas, {
+  onTap() {
     const screen = world.state.screen;
+    if (screen === SCREEN_TITLE || screen === SCREEN_CAUGHT || screen === SCREEN_ESCAPED) {
+      startRun();
+    } else if (screen === SCREEN_PLAYING) {
+      tapJump = true;
+    } else if (screen === SCREEN_PAUSED) {
+      resumeRun();
+    }
+  },
+});
 
-    if (screen === 'title') {
-      if (actions.includes(ACTION_CONFIRM)) {
-        audio.unlock();
-        audio.gobble();
-        world.start();
-        showScreen(null);
-      }
-    } else if (screen === 'play') {
-      if (actions.includes(ACTION_PAUSE)) {
-        world.state.screen = 'paused';
-        showScreen('paused');
-      } else {
-        const act = { move: 0, jump: false, drop: false };
-        for (const a of actions) {
-          if (a === ACTION_LEFT) act.move = -1;
-          if (a === ACTION_RIGHT) act.move = 1;
-          if (a === ACTION_JUMP) act.jump = true;
-          if (a === ACTION_DROP) act.drop = true;
-        }
-        acc += dt;
-        let first = true;
-        while (acc >= STEP) {
-          const ev = world.step(STEP, first ? act : { move: 0, jump: false, drop: false });
-          first = false;
-          acc -= STEP;
-          if (ev & EVENT_HIT) audio.hit();
-          if (ev & EVENT_CORN) audio.pickup();
-          if (ev & EVENT_LEVEL) audio.level();
-          if (ev & EVENT_CAUGHT) {
-            audio.caught();
-            if (world.state.score > best) { best = world.state.score; saveBest(best); }
-            showScreen('caught');
-            break;
-          }
-          if (ev & EVENT_ESCAPED) {
-            audio.escaped();
-            if (world.state.score > best) { best = world.state.score; saveBest(best); }
-            showScreen('escaped');
-            break;
-          }
-          if (world.state.screen !== 'play') break;
-        }
-      }
-    } else if (screen === 'paused') {
-      if (actions.includes(ACTION_PAUSE) || actions.includes(ACTION_CONFIRM)) {
-        world.state.screen = 'play';
-        showScreen(null);
-      }
+function showOverlay(name) {
+  for (const [key, el] of Object.entries(overlays)) {
+    if (!el) continue;
+    el.classList.toggle('show', key === name);
+  }
+}
+
+function updateHud() {
+  const s = world.state;
+  hud.score.textContent = String(s.score);
+  hud.distance.textContent = `${Math.floor(s.distance)} m`;
+  hud.corn.textContent = `CORN ${s.corn}`;
+  hud.lives.textContent = '♥'.repeat(Math.max(0, s.lives)) + '♡'.repeat(Math.max(0, 3 - s.lives));
+  hud.level.textContent = `LEVEL ${s.level}`;
+  hud.progress.style.width = `${Math.min(100, (s.distance / GOAL_DISTANCE) * 100)}%`;
+}
+
+function statsLine(s) {
+  return `Score ${s.score} · ${Math.floor(s.distance)} m · ${s.corn} corn`;
+}
+
+function startRun() {
+  audio.unlock();
+  audio.click();
+  audio.gobble();
+  world.start();
+  renderer.reset();
+  showOverlay(null);
+}
+
+function resumeRun() {
+  world.togglePause();
+  showOverlay(null);
+}
+
+function pauseRun() {
+  world.togglePause();
+  showOverlay('pause');
+}
+
+function onEvents(events) {
+  if (events & EVENT_CORN) audio.corn();
+  if (events & EVENT_HIT) audio.hit();
+  if (events & EVENT_CAUGHT) {
+    audio.caught();
+    caughtStats.textContent = statsLine(world.state);
+    showOverlay('caught');
+  }
+  if (events & EVENT_ESCAPED) {
+    audio.escaped();
+    escapedStats.textContent = statsLine(world.state);
+    showOverlay('escaped');
+  }
+}
+
+// --- Screenshot staging -------------------------------------------------
+let frozenTime = null;
+if (SHOT_MODE) {
+  const summary = stageShot(world, shotKind);
+  window.__shotSummary = summary;
+  // Freeze the animation clock so every rendered frame is identical.
+  frozenTime = 12.5;
+  updateHud();
+  if (world.state.screen === SCREEN_CAUGHT) {
+    caughtStats.textContent = statsLine(world.state);
+    showOverlay('caught');
+  } else if (world.state.screen === SCREEN_ESCAPED) {
+    escapedStats.textContent = statsLine(world.state);
+    showOverlay('escaped');
+  } else if (shotKind === 'start') {
+    showOverlay('title');
+  } else {
+    showOverlay(null);
+  }
+  renderer.sync(world.state, frozenTime);
+  window.__shotReady = true;
+}
+
+// --- Main loop ----------------------------------------------------------
+let lastNow = performance.now();
+let accumulator = 0;
+
+function frame(now) {
+  const dt = Math.min(0.1, (now - lastNow) / 1000);
+  lastNow = now;
+
+  if (SHOT_MODE) {
+    // Frozen frame: redraw identically, never step the world.
+    renderer.sync(world.state, frozenTime);
+    requestAnimationFrame(frame);
+    return;
+  }
+
+  const screen = world.state.screen;
+
+  if (input.consumeMute()) {
+    const muted = audio.toggleMute();
+    document.querySelector('#mute-note').textContent = muted ? 'M — sound off' : 'M — sound on';
+  }
+
+  if (screen === SCREEN_TITLE || screen === SCREEN_CAUGHT || screen === SCREEN_ESCAPED) {
+    if (input.consumeConfirm()) startRun();
+    input.readAction(); // drain any queued steering
+  } else if (screen === SCREEN_PAUSED) {
+    if (input.consumePause() || input.consumeConfirm()) resumeRun();
+    input.readAction();
+  } else if (screen === SCREEN_PLAYING) {
+    if (input.consumePause()) {
+      pauseRun();
     } else {
-      // caught | escaped
-      if (actions.includes(ACTION_CONFIRM)) {
-        world.reset();
-        showScreen('title');
+      accumulator += dt;
+      while (accumulator >= STEP) {
+        const action = input.readAction();
+        if (tapJump) {
+          action.jump = true;
+          tapJump = false;
+        }
+        const events = world.fixedStep(action);
+        onEvents(events);
+        accumulator -= STEP;
+        if (world.state.screen !== SCREEN_PLAYING) {
+          accumulator = 0;
+          break;
+        }
       }
     }
-
-    renderer.draw(world.state, now / 1000);
-    requestAnimationFrame(frame);
   }
+
+  updateHud();
+  renderer.sync(world.state, now / 1000);
   requestAnimationFrame(frame);
 }
 
-if (shot) runShot(shot);
-else runGame();
+function resize() {
+  renderer.resize(canvas.clientWidth, canvas.clientHeight);
+}
+window.addEventListener('resize', resize);
+resize();
+if (!SHOT_MODE) {
+  showOverlay('title');
+  updateHud();
+}
+requestAnimationFrame(frame);
