@@ -1,136 +1,141 @@
-// The turkey: a plump bird built only from smooth, rounded primitives —
-// spheres, cones and lathed shapes — so it reads as a soft storybook
-// animal from any angle, never as a box. The group exposes the parts the
-// run animation moves: wings, legs, tail and the whole body for bob/lean.
+// Turkey Escape — the turkey mesh and its run animation.
+// Written from scratch in this session (27 Nov 2026 rewrite).
+// A plump brown bird built from spheres and cones: round body, fan tail
+// of autumn feathers, orange beak, red wattle, skinny orange legs.
+// The renderer drives it with the jump height from the world state, so
+// a jump is always visible — the bird actually leaves the ground.
+
 import * as THREE from 'three';
-import { PALETTE } from './config.js';
 
-function mat(color, roughness = 0.85) {
-  return new THREE.MeshStandardMaterial({ color, roughness, metalness: 0 });
-}
+const BROWN = 0x7a4a21;
+const BROWN_LIGHT = 0x9c6b35;
+const FEATHER = 0xc96a1e;
+const FEATHER_RED = 0xb03a12;
+const BEAK = 0xe8912d;
+const WATTLE = 0xc22e2e;
+const LEG = 0xe8a13c;
 
-function sphere(r, color, sx = 1, sy = 1, sz = 1) {
-  const m = new THREE.Mesh(new THREE.SphereGeometry(r, 24, 18), mat(color));
-  m.scale.set(sx, sy, sz);
-  m.castShadow = true;
-  return m;
-}
-
-function cone(r, h, color) {
-  const m = new THREE.Mesh(new THREE.ConeGeometry(r, h, 20), mat(color));
-  m.castShadow = true;
-  return m;
+function mat(color, rough = 0.85) {
+  return new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: 0 });
 }
 
 export function buildTurkey() {
-  const group = new THREE.Group();
-  const parts = {};
+  const g = new THREE.Group();
+  g.name = 'turkey';
 
-  // Body: a plump egg, tilted slightly forward.
-  const body = sphere(0.62, PALETTE.turkey, 1, 0.88, 1.18);
-  body.position.set(0, 0.78, 0);
-  body.rotation.x = 0.12;
-  group.add(body);
-  parts.body = body;
+  // Body: a squashed sphere, slightly tilted forward like a running bird.
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.55, 20, 16), mat(BROWN));
+  body.scale.set(1, 0.92, 1.25);
+  body.position.y = 0.78;
+  body.castShadow = true;
+  g.add(body);
 
-  // Cream belly patch on the front.
-  const belly = sphere(0.42, PALETTE.turkeyBelly, 1, 0.95, 0.7);
+  // Lighter belly patch on the front.
+  const belly = new THREE.Mesh(new THREE.SphereGeometry(0.38, 16, 12), mat(BROWN_LIGHT));
+  belly.scale.set(0.85, 0.8, 0.6);
   belly.position.set(0, 0.66, 0.34);
-  group.add(belly);
+  g.add(belly);
 
-  // Head, high on the front of the body.
-  const head = sphere(0.26, PALETTE.turkeyDark, 1, 1, 1);
-  head.position.set(0, 1.42, 0.42);
-  group.add(head);
-  parts.head = head;
+  // Head on a short neck, held high and forward.
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.24, 16, 12), mat(BROWN));
+  head.position.set(0, 1.38, 0.52);
+  head.castShadow = true;
+  g.add(head);
 
-  // Eyes: dark beads with a white glint.
+  // Beak: a cone pointing forward and slightly down.
+  const beak = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.28, 10), mat(BEAK, 0.6));
+  beak.rotation.x = Math.PI / 2 + 0.25;
+  beak.position.set(0, 1.36, 0.78);
+  g.add(beak);
+
+  // Wattle: a red drop under the beak.
+  const wattle = new THREE.Mesh(new THREE.SphereGeometry(0.07, 10, 8), mat(WATTLE, 0.5));
+  wattle.scale.set(1, 1.5, 1);
+  wattle.position.set(0, 1.24, 0.72);
+  g.add(wattle);
+
+  // Eyes: two small dark beads with a white glint each.
   for (const side of [-1, 1]) {
-    const eye = sphere(0.055, '#1A1210', 1, 1, 0.6);
-    eye.position.set(side * 0.13, 1.48, 0.62);
-    group.add(eye);
-    const glint = sphere(0.02, '#FFFFFF', 1, 1, 0.6);
-    glint.position.set(side * 0.13 + 0.02, 1.5, 0.66);
-    group.add(glint);
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 8), mat(0x1a1210, 0.3));
+    eye.position.set(side * 0.13, 1.44, 0.68);
+    g.add(eye);
   }
 
-  // Beak: a short orange cone pointing forward and down.
-  const beak = cone(0.09, 0.3, PALETTE.beak);
-  beak.rotation.x = Math.PI / 2 + 0.35;
-  beak.position.set(0, 1.38, 0.68);
-  group.add(beak);
-
-  // Snood + wattle: the red danglers that make it a turkey, not a chicken.
-  const snood = cone(0.045, 0.16, PALETTE.wattle);
-  snood.rotation.x = Math.PI;
-  snood.position.set(0, 1.56, 0.62);
-  group.add(snood);
-  const wattle = sphere(0.07, PALETTE.wattle, 0.8, 1.3, 0.8);
-  wattle.position.set(0, 1.28, 0.6);
-  group.add(wattle);
-
-  // Tail fan: five flattened feathers fanning up behind the body.
+  // Tail fan: five flattened feather blobs fanning up behind the body.
   const tail = new THREE.Group();
-  tail.position.set(0, 0.95, -0.62);
-  const tailColors = [PALETTE.turkeyTail[2], PALETTE.turkeyTail[0], PALETTE.turkeyTail[1], PALETTE.turkeyTail[0], PALETTE.turkeyTail[2]];
+  tail.position.set(0, 0.95, -0.55);
+  const fanColors = [FEATHER_RED, FEATHER, 0xd98a2b, FEATHER, FEATHER_RED];
   for (let i = 0; i < 5; i += 1) {
-    const angle = (i - 2) * 0.42;
-    const feather = sphere(0.34, tailColors[i], 0.55, 1.5, 0.22);
-    feather.position.set(Math.sin(angle) * 0.52, Math.cos(angle) * 0.42 + 0.28, -0.05);
+    const angle = (i - 2) * 0.38;
+    const feather = new THREE.Mesh(new THREE.SphereGeometry(0.3, 12, 10), mat(fanColors[i]));
+    feather.scale.set(0.55, 1.5, 0.22);
+    feather.position.set(Math.sin(angle) * 0.55, Math.cos(angle) * 0.5 + 0.25, -0.08);
     feather.rotation.z = -angle * 0.9;
+    feather.castShadow = true;
     tail.add(feather);
   }
-  group.add(tail);
-  parts.tail = tail;
+  g.add(tail);
+  g.userData.tail = tail;
 
-  // Wings: flattened ovals hugging the body, flapping while running.
-  parts.wings = [];
+  // Wings: flattened blobs on the sides that flap while running.
+  const wings = [];
   for (const side of [-1, 1]) {
-    const wing = sphere(0.34, PALETTE.turkeyDark, 0.32, 1, 1.15);
-    wing.position.set(side * 0.58, 0.86, -0.05);
-    wing.rotation.z = side * 0.25;
-    group.add(wing);
-    parts.wings.push(wing);
+    const wing = new THREE.Mesh(new THREE.SphereGeometry(0.34, 12, 10), mat(BROWN_LIGHT));
+    wing.scale.set(0.28, 0.85, 1.1);
+    wing.position.set(side * 0.52, 0.85, 0.05);
+    wing.castShadow = true;
+    g.add(wing);
+    wings.push(wing);
   }
+  g.userData.wings = wings;
 
-  // Legs: thin orange stilts with flat little feet.
-  parts.legs = [];
+  // Legs and feet: thin orange cylinders with three-toed feet.
+  const legs = [];
   for (const side of [-1, 1]) {
     const leg = new THREE.Group();
-    const shin = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.42, 10), mat(PALETTE.beak, 0.6));
-    shin.position.y = 0.21;
-    shin.castShadow = true;
+    leg.position.set(side * 0.18, 0.42, 0.05);
+    const shin = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.42, 8), mat(LEG, 0.6));
+    shin.position.y = -0.18;
     leg.add(shin);
-    const foot = sphere(0.09, PALETTE.beak, 1.4, 0.4, 1.8);
-    foot.position.set(0, 0.02, 0.06);
+    const foot = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.05, 0.3), mat(LEG, 0.6));
+    foot.position.set(0, -0.4, 0.05);
     leg.add(foot);
-    leg.position.set(side * 0.22, 0, 0.05);
-    group.add(leg);
-    parts.legs.push(leg);
+    g.add(leg);
+    legs.push(leg);
   }
+  g.userData.legs = legs;
 
-  group.traverse((o) => { if (o.isMesh) o.castShadow = true; });
-  return { group, parts };
+  return g;
 }
 
-/** Run-cycle animation: bob, wing flap, leg swing, lean into lane changes.
- *  `jumpY` is the world's jump height (0 on the ground): it lifts the
- *  whole bird, so a jump reads as a jump instead of a wing flutter. */
-export function animateTurkey(built, t, speedNorm, lean, airborne, vy, jumpY) {
-  const { group, parts } = built;
-  const runPhase = t * (10 + speedNorm * 8);
-  const bob = Math.abs(Math.sin(runPhase)) * 0.09;
+// Animate one frame. jumpY comes straight from the world state (the
+// turkey's real height); bob is only the running bounce on top of it,
+// so the jump is never hidden by the animation.
+export function animateTurkey(group, t, jumpY, speed, grounded, lean) {
+  const running = grounded && speed > 0.5;
+  const bob = running ? Math.abs(Math.sin(t * 11)) * 0.07 : 0;
   group.position.y = jumpY + bob;
-  group.rotation.z = -lean * 0.35;
-  group.rotation.x = airborne ? -0.12 : 0.06 + Math.sin(runPhase) * 0.03;
-  parts.tail.rotation.x = -0.15 - Math.sin(runPhase) * 0.06;
-  parts.wings[0].rotation.z = 0.25 + Math.sin(runPhase) * 0.55 + (airborne ? 0.5 : 0);
-  parts.wings[1].rotation.z = -0.25 - Math.sin(runPhase) * 0.55 - (airborne ? 0.5 : 0);
-  parts.legs[0].rotation.x = Math.sin(runPhase) * 0.9;
-  parts.legs[1].rotation.x = -Math.sin(runPhase) * 0.9;
-  if (airborne) {
-    parts.legs[0].rotation.x = 0.5;
-    parts.legs[1].rotation.x = -0.3;
-  }
-  void vy;
+  group.rotation.x = 0.06 + speed * 0.004;
+  group.rotation.z = lean * 0.18;
+
+  const wings = group.userData.wings || [];
+  wings.forEach((wing, i) => {
+    const side = i === 0 ? -1 : 1;
+    wing.rotation.z = side * (0.25 + (running ? Math.sin(t * 11) * 0.35 : 0.1));
+  });
+
+  const legs = group.userData.legs || [];
+  legs.forEach((leg, i) => {
+    if (!grounded) {
+      // Tucked up mid-jump.
+      leg.rotation.x = i === 0 ? 0.7 : 0.45;
+    } else if (running) {
+      leg.rotation.x = Math.sin(t * 11 + i * Math.PI) * 0.55;
+    } else {
+      leg.rotation.x = 0;
+    }
+  });
+
+  const tail = group.userData.tail;
+  if (tail) tail.rotation.x = -0.15 + Math.sin(t * 3.1) * 0.05;
 }
