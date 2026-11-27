@@ -274,7 +274,7 @@ export function createRenderer(canvas) {
       farmer.visible = true;
       farmer.position.set(state.x, 0, 1.1);
       farmer.rotation.y = Math.PI;
-      animateFarmer(farmer, time, 0, false);
+      animateFarmer(farmer, time, 0, false, 0.4);
     } else if (state.screen === SCREEN_ESCAPED) {
       animateTurkey(turkey, time, state.y, 0, state.grounded, 0);
       turkey.position.y = state.y + 0.05;
@@ -286,7 +286,7 @@ export function createRenderer(canvas) {
       animateTurkey(turkey, time, state.y, state.speed, state.grounded, lean);
       farmer.position.set(state.x * 0.9, 0, -state.gap);
       farmer.rotation.y = 0;
-      animateFarmer(farmer, time, state.speed, true);
+      animateFarmer(farmer, time, state.speed, true, state.gap);
     }
 
     syncObstacles(state);
