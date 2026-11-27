@@ -82,16 +82,28 @@ export function autopilot(state, horizonSeconds = 1.5, chaseCorn = false) {
     }
 
     // Current lane is clear for this row. Corn chasing is allowed only
-    // while the row is still far away (rule 4).
-    if (chaseCorn && distTo > 25) {
-      return chaseNearestCorn(state, laneNow, speed);
+    // while the row is still far away (rule 4); otherwise drift back
+    // toward the centre lane, which keeps the most escape options open.
+    if (distTo > 25) {
+      if (chaseCorn) return chaseNearestCorn(state, laneNow, speed);
+      return driftToCentre(laneNow);
     }
     return NO_ACTION;
   }
 
-  // No row in sight: chase corn if allowed, else hold the lane.
-  if (chaseCorn) return chaseNearestCorn(state, laneNow, speed);
-  return NO_ACTION;
+  // No row in sight: chase corn if allowed, else hold the centre.
+  if (chaseCorn) {
+    const cornAction = chaseNearestCorn(state, laneNow, speed);
+    if (cornAction !== NO_ACTION) return cornAction;
+  }
+  return driftToCentre(laneNow);
+}
+
+// With no pressing danger, the centre lane is the best place to be:
+// either side is one quick switch away.
+function driftToCentre(laneNow) {
+  if (laneNow === 1) return NO_ACTION;
+  return { steer: Math.sign(1 - laneNow), jump: false, drop: false };
 }
 
 function chaseNearestCorn(state, laneNow, speed) {
