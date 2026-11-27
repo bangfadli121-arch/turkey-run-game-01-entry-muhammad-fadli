@@ -1,155 +1,168 @@
-// The screenshot scenes behind ?shot=start|play|caught|escaped. Each one
-// plays the real rules forward from a fresh world, steered by an autopilot,
-// so every frame is what a short game really looks like and the same seed
-// always gives the same frame.
-import { EVENT_CAUGHT, EVENT_ESCAPED } from './world.js';
-import { LANES, STEP } from './config.js';
+// Turkey Escape — autopilot and screenshot staging.
+// Written from scratch in this session (27 Nov 2026 rewrite).
+// The autopilot is a careful pilot, not a cheater: it only reads the
+// world state (nearest row, lanes, corn) and returns the same action a
+// player could press. It exists so the game can prove itself winnable
+// headlessly and so the four entry screenshots can be staged
+// deterministically from one seed.
+//
+// Lessons baked in from earlier pilot failures:
+//  1. Only the nearest row decides anything; further rows are noise.
+//  2. Never change lane while still inside a row's collision window —
+//     hold the lane until 1.5 m past the row.
+//  3. Consider every lane as a candidate, ordered by distance, and allow
+//     transiting through the middle lane.
+//  4. Chase corn only when the nearest row is far away (> 25 m); in
+//     escaped mode never chase corn at all.
+//  5. Judge everything by the physical lane (where the turkey's body
+//     actually is), never by the target lane.
 
-const PLAY_SECONDS = 22;
-const LIMIT_SECONDS = 600;
-const SAMPLE = 1 / 30;
+import { STEP, GOAL_DISTANCE, TALL_KINDS, LANE_X } from './config.js';
+import { physicalLane, EVENT_CAUGHT, EVENT_ESCAPED } from './world.js';
 
-/** Is `lane` clear of tall blockers in the nearest row ahead? The pilot
- *  plans one row at a time: it must be in a lane with no tall obstacle
- *  when it crosses the next row, then it re-plans for the row after.
- *  (A fixed look-ahead window corners it at level 5, where two rows can
- *  block all three lanes between them while no single lane survives both.) */
-function laneSafe(state, lane) {
-  const pz = -state.distance;
-  let nearest = Infinity;
-  for (const o of state.obstacles) {
-    if (o.hit || o.passed) continue;
-    const dz = pz - o.z;
-    if (dz > 0 && dz < nearest) nearest = dz;
+const NO_ACTION = Object.freeze({ steer: 0, jump: false, drop: false });
+
+// The nearest row the turkey has not fully passed yet.
+function nearestRow(state) {
+  for (const row of state.rows) {
+    if (row.dist > state.distance - 1.5) return row;
   }
-  if (nearest === Infinity) return true;
-  for (const o of state.obstacles) {
-    if (o.hit || o.passed) continue;
-    const dz = pz - o.z;
-    if (dz <= 0 || dz > nearest + 6) continue;
-    if (o.lane !== lane) continue;
-    if (o.kind === 'oven' || o.kind === 'knife') return false;
-  }
-  return true;
+  return null;
 }
 
-/** The careful pilot: keep the current lane when safe, else the nearest
- *  safe lane. When `chaseCorn` it also drifts toward the lane with the
- *  most corn — but only while the next row is far away, so it never
- *  oscillates between lanes right before a row. Jump a low obstacle that
- *  is right in front of the turkey, in the lane it is heading for or the
- *  lane its feet are still in. */
-function autopilot(state, horizon, chaseCorn) {
-  const pz = -state.distance;
-  let nearest = Infinity;
-  for (const o of state.obstacles) {
-    if (o.hit || o.passed) continue;
-    const dz = pz - o.z;
-    if (dz > 0 && dz < nearest) nearest = dz;
-  }
-  let physicalLane = 0;
-  let bestD = Infinity;
-  for (let i = 0; i < 3; i += 1) {
-    const d = Math.abs(LANES[i] - state.x);
-    if (d < bestD) { bestD = d; physicalLane = i; }
-  }
-  let lowAhead = false;
-  for (const o of state.obstacles) {
-    if (o.hit || o.passed) continue;
-    const dz = pz - o.z;
-    if (dz <= 0 || dz > state.speed * 0.45) continue;
-    if (o.lane !== state.lane && o.lane !== physicalLane) continue;
-    const tall = o.kind === 'oven' || o.kind === 'knife';
-    if (!tall) lowAhead = true;
-  }
-  // Still crossing a row? Hold the lane until the turkey is 1.5 m past
-  // every obstacle in the row — switching while inside the collision
-  // window (±1.2 m) clips the corner of an obstacle it just passed.
-  for (const o of state.obstacles) {
-    if (o.hit || o.passed) continue;
-    const dz = pz - o.z;
-    if (dz >= -1.2 && dz <= 1.5) return { move: 0, jump: lowAhead };
-  }
-  // Pick the nearest lane that is safe for the next row. All three lanes
-  // are candidates: reaching the far lane means transiting the middle one,
-  // which is fine — the turkey only has to be out of a blocked lane by the
-  // time it crosses the row, not while it is still metres away from it.
-  // (Restricting the choice to adjacent lanes strands the turkey when the
-  // only survivable lane is two lanes over.)
-  const lanes = [0, 1, 2].sort((a, b) => Math.abs(a - state.lane) - Math.abs(b - state.lane));
-  let bestLane = state.lane;
-  let bestCorn = -1;
-  for (const lane of lanes) {
-    if (!laneSafe(state, lane)) continue;
-    let corn = 0;
-    if (chaseCorn && nearest > 25) {
-      for (const c of state.corns) {
-        if (!c.taken && c.lane === lane && pz - c.z > 0 && pz - c.z < 30) corn += 1;
+function rowTimeTo(state, row) {
+  return Math.max(0, (row.dist - state.distance) / Math.max(1, state.speed));
+}
+
+export function autopilot(state, horizonSeconds = 1.5, chaseCorn = false) {
+  const row = nearestRow(state);
+  const laneNow = physicalLane(state.x);
+  const speed = Math.max(1, state.speed);
+
+  if (row) {
+    const timeTo = rowTimeTo(state, row);
+    const distTo = row.dist - state.distance;
+    const cell = row.cells[laneNow];
+    const isTallHere = cell && TALL_KINDS.includes(cell);
+    const isLowHere = cell && !TALL_KINDS.includes(cell);
+
+    // Rule 2: inside (or just past) a row's window, hold the lane.
+    // Steering now would clip the row's corner.
+    if (distTo < 1.5 && distTo > -1.5) {
+      if (isLowHere && state.grounded) return { steer: 0, jump: true, drop: false };
+      return NO_ACTION;
+    }
+
+    if (isTallHere) {
+      // Rule 3: every lane is a candidate, nearest first. A lane is
+      // safe if it holds no tall obstacle; a low one is fine because
+      // we can jump it once we get there.
+      const candidates = [0, 1, 2]
+        .filter((lane) => lane !== laneNow)
+        .sort((a, b) => Math.abs(a - laneNow) - Math.abs(b - laneNow));
+      for (const lane of candidates) {
+        const kind = row.cells[lane];
+        if (!kind || !TALL_KINDS.includes(kind)) {
+          return { steer: Math.sign(lane - laneNow), jump: false, drop: false };
+        }
       }
+      // No safe lane (cannot happen with the spawner's guarantee, but
+      // never crash the pilot if it ever does).
+      return NO_ACTION;
     }
-    if (corn > bestCorn) {
-      bestCorn = corn;
-      bestLane = lane;
+
+    if (isLowHere) {
+      // Jump so the row arrives while the turkey is high: the jump's
+      // high window is roughly 0.08–0.82 s after take-off, so start
+      // the jump when the row is about half a second away.
+      if (timeTo <= 0.55 && state.grounded) {
+        return { steer: 0, jump: true, drop: false };
+      }
+      return NO_ACTION;
     }
+
+    // Current lane is clear for this row. Corn chasing is allowed only
+    // while the row is still far away (rule 4).
+    if (chaseCorn && distTo > 25) {
+      return chaseNearestCorn(state, laneNow, speed);
+    }
+    return NO_ACTION;
   }
-  // If no lane is safe, stay put (a hit is coming) — the pilot was too late.
-  return { move: bestLane - state.lane, jump: lowAhead };
+
+  // No row in sight: chase corn if allowed, else hold the lane.
+  if (chaseCorn) return chaseNearestCorn(state, laneNow, speed);
+  return NO_ACTION;
 }
 
-/** The careless pilot: never changes lane, never jumps. It gets caught. */
-function carelessPilot() {
-  return { move: 0, jump: false };
+function chaseNearestCorn(state, laneNow, speed) {
+  let best = null;
+  for (const cob of state.corns) {
+    if (cob.taken) continue;
+    const ahead = cob.dist - state.distance;
+    if (ahead < 2 || ahead > 40) continue;
+    if (!best || ahead < best.dist - state.distance) best = cob;
+  }
+  if (best && best.lane !== laneNow) {
+    return { steer: Math.sign(best.lane - laneNow), jump: false, drop: false };
+  }
+  return NO_ACTION;
 }
 
-/**
- * Set `world` to the named scene and return the screen to draw over it and
- * the best score to show. Names: start | play | caught | escaped.
- */
-export function stageShot(name, world) {
-  world.reset();
-  const state = world.state;
-  if (name !== 'play' && name !== 'caught' && name !== 'escaped') {
-    state.screen = 'title';
-    return { screen: 'title', best: 0 };
+// --- Screenshot staging -------------------------------------------------
+// Each shot is produced by actually playing the world from the seed,
+// then freezing it: the browser loop keeps rendering the frozen frame,
+// which is what makes the screenshot deterministic.
+
+export const SHOT_TARGETS = {
+  play: { distance: 200 },
+  caught: {},
+  escaped: {},
+};
+
+export function stageShot(world, kind) {
+  const maxSteps = Math.floor(600 / STEP);
+  const summary = { kind, steps: 0, outcome: 'timeout' };
+
+  if (kind === 'start') {
+    world.reset(world.state.seed);
+    summary.outcome = 'title';
+    summary.distance = 0;
+    summary.score = 0;
+    summary.corn = 0;
+    summary.lives = world.state.lives;
+    summary.level = 1;
+    return summary;
   }
+
   world.start();
-  if (name === 'play') {
-    for (let i = 0; i < PLAY_SECONDS / STEP; i += 1) {
-      const act = autopilot(state, 0.9, true);
-      const ev = world.step(STEP, act);
-      if (ev & (EVENT_CAUGHT | EVENT_ESCAPED)) break;
+  let steps = 0;
+  let events = 0;
+  for (let i = 0; i < maxSteps; i += 1) {
+    let action = NO_ACTION;
+    if (kind === 'play') action = autopilot(world.state, 1.5, true);
+    else if (kind === 'escaped') action = autopilot(world.state, 1.5, false);
+    else if (kind === 'caught') action = NO_ACTION; // clumsy: never dodges
+    events = world.step(STEP, action);
+    steps += 1;
+    if (kind === 'play' && world.state.distance >= SHOT_TARGETS.play.distance) {
+      summary.outcome = 'staged-play';
+      break;
     }
-    // Nudge forward until a row of obstacles sits 12-18 m ahead with a
-    // corn line in view, so the frame shows what the run is about instead
-    // of empty track.
-    for (let i = 0; i < 8 / STEP; i += 1) {
-      const pz = -state.distance;
-      const near = state.obstacles.some((o) => !o.hit && !o.passed && pz - o.z > 12 && pz - o.z < 18);
-      const cornNear = state.corns.some((c) => !c.taken && pz - c.z > 0 && pz - c.z < 40);
-      if (near && cornNear) break;
-      const ev = world.step(STEP, autopilot(state, 0.9, true));
-      if (ev & (EVENT_CAUGHT | EVENT_ESCAPED)) break;
+    if (events & EVENT_ESCAPED) {
+      summary.outcome = 'escaped';
+      break;
     }
-    return { screen: 'play', best: state.score };
-  }
-  if (name === 'caught') {
-    for (let i = 0; i < LIMIT_SECONDS / STEP; i += 1) {
-      const ev = world.step(STEP, carelessPilot());
-      if (ev & EVENT_CAUGHT) break;
-      if (ev & EVENT_ESCAPED) break;
+    if (events & EVENT_CAUGHT) {
+      summary.outcome = 'caught';
+      break;
     }
-    return { screen: state.screen === 'caught' ? 'caught' : 'play', best: state.score };
   }
-  // escaped: run carefully almost to the woods, then keep going to the win.
-  // The careful pilot plans one row at a time and holds its lane while it
-  // crosses a row, so it never clips the corner of an obstacle just passed.
-  for (let i = 0; i < LIMIT_SECONDS / STEP; i += 1) {
-    const act = autopilot(state, 1.5, false);
-    const ev = world.step(STEP, act);
-    if (ev & EVENT_ESCAPED) break;
-    if (ev & EVENT_CAUGHT) break;
-  }
-  return { screen: state.screen === 'escaped' ? 'escaped' : 'play', best: state.score };
+  summary.steps = steps;
+  summary.distance = Math.floor(world.state.distance);
+  summary.score = world.state.score;
+  summary.corn = world.state.corn;
+  summary.lives = world.state.lives;
+  summary.level = world.state.level;
+  summary.goal = GOAL_DISTANCE;
+  return summary;
 }
-
-export { autopilot, laneSafe };
